@@ -23,6 +23,35 @@ MULTIPLIER=1000
 GRAN={'5m':'FIVE_MINUTE','15m':'FIFTEEN_MINUTE','1h':'ONE_HOUR','4h':'FOUR_HOUR'}
 SECONDS={'5m':300,'15m':900,'1h':3600,'4h':14400}
 
+@st.cache_data(ttl=300, show_spinner=False)
+def discover_ada_contracts():
+    """Discover only verified dated ADA futures via Coinbase public product metadata."""
+    endpoint='https://api.coinbase.com/api/v3/brokerage/market/products'
+    found=[]; errors=[]
+    for offset in range(0,1000,100):
+        try:
+            response=requests.get(endpoint,params={'limit':100,'offset':offset,'product_type':'FUTURE'},timeout=12,
+                                  headers={'User-Agent':'Nano-ADA-SignalLab/1.1'})
+            response.raise_for_status()
+            payload=response.json()
+            products=payload.get('products',[])
+            if not isinstance(products,list): raise ValueError('Unexpected product listing response')
+            for meta in products:
+                pid=str(meta.get('product_id',''))
+                details=meta.get('future_product_details') or {}
+                expiry=details.get('contract_expiry') or details.get('expiration_time') or ''
+                if str(meta.get('product_type','')).upper()!='FUTURE' or not details or not expiry: continue
+                if 'ADA' not in pid.upper().split('-') and not pid.upper().startswith('ADA-'): continue
+                if 'PERP' in pid.upper() or 'PERPETUAL' in str(details).upper(): continue
+                try: parsed=pd.to_datetime(expiry,utc=True)
+                except Exception: continue
+                if parsed<=pd.Timestamp.now(tz='UTC'): continue
+                found.append({'product_id':pid,'expiration':parsed.strftime('%Y-%m-%d'),'metadata':meta})
+            if len(products)<100: break
+        except Exception as exc:
+            errors.append(str(exc)); break
+    return found,errors
+
 def load_public(product,tf):
     now=int(time.time()); span=SECONDS[tf]*300
     url=f'https://api.coinbase.com/api/v3/brokerage/market/products/{product}'
@@ -95,8 +124,25 @@ def analyze(df):
 
 st.header('Connect futures data')
 mode=st.radio('Choose', ['Automatic: verified Coinbase futures','Verified futures CSV'])
-product=st.text_input('Exact Coinbase futures product ID',placeholder='Enter ID from Coinbase product listing',help='Do not enter ADA-USD spot or an unverified symbol.')
-expiry=st.text_input('Contract expiration (UTC)',placeholder='YYYY-MM-DD',help='Required for CSV source; confirm from Coinbase contract details.')
+st.caption('Auto-discovery uses Coinbase public product metadata; no Coinbase login or API key required.')
+expiry=st.text_input('Contract expiration (UTC)',value='2026-10-30',placeholder='YYYY-MM-DD')
+selected_product=''
+if mode.startswith('Automatic'):
+    contracts, discovery_errors=discover_ada_contracts()
+    matching=[c for c in contracts if c['expiration']==expiry.strip()]
+    if matching:
+        choices=[c['product_id'] for c in matching]
+        selected_product=st.selectbox('Verified monthly ADA futures contract',choices)
+        st.success('Found matching futures product metadata. Candle access is checked separately.')
+    else:
+        st.warning('No exact monthly ADA futures contract found in the public listing. Automatic signals remain disabled.')
+        if discovery_errors: st.caption('Product discovery error: '+discovery_errors[0])
+    manual=st.text_input('Advanced: exact product ID (optional)',placeholder='Only if verified from Coinbase')
+    if manual.strip():
+        selected_product=manual.strip()
+else:
+    selected_product=st.text_input('Verified futures product ID for CSV',placeholder='Coinbase contract identifier')
+product=selected_product
 refresh=st.button('Refresh data')
 if refresh: st.cache_data.clear()
 @st.cache_data(ttl=60,show_spinner=False)
@@ -104,11 +150,14 @@ def cached_fetch(p,tf): return load_public(p,tf)
 
 frames={}; verified=False; source=''; exp_value=''
 if mode.startswith('Automatic'):
-    if not product: st.info('Enter the exact monthly ADA futures product ID to try the public Coinbase API. This dashboard will not substitute spot data.')
+    if not product: st.info('Automatic contract discovery did not identify a usable product. No spot-data substitution.')
     else:
         for tf in GRAN:
             try:
                 frames[tf],exp_value=cached_fetch(product,tf)
+                if pd.to_datetime(exp_value,utc=True).date()!=pd.to_datetime(expiry,utc=True).date():
+                    frames.pop(tf,None)
+                    raise ValueError('API expiration differs from selected expiration; signals blocked.')
             except Exception as e:
                 st.warning(f'{tf}: {e}')
         verified=len(frames)>0
