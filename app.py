@@ -9,8 +9,8 @@ BASE = 'https://api.coinbase.com/api/v3/brokerage/market/products'
 CONTRACT_SIZE = 1000
 TICK = 0.0001
 INTERVALS = {'5 minutes': ('FIVE_MINUTE', 300), '15 minutes': ('FIFTEEN_MINUTE', 900), '1 hour': ('ONE_HOUR', 3600), '4 hours': ('FOUR_HOUR', 14400)}
-st.set_page_config(page_title='Nano ADA Futures • Signal Lab 2.0', layout='wide')
-st.title('Nano ADA Futures • Signal Lab 2.0')
+st.set_page_config(page_title='Nano ADA Futures • Signal Lab 2.1', layout='wide')
+st.title('Nano ADA Futures • Signal Lab 2.1')
 st.caption('Read-only • Coinbase futures candles only • No orders placed')
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -163,6 +163,12 @@ st.write(f'4-hour context: **{context}** | 1-hour trend: **{ht}** | 15-minute tr
 st.write(f'15m VWAP (UTC-day): **${q.vwap:.4f}**' if pd.notna(q.vwap) else '15m VWAP: unavailable (no volume)')
 st.write(f'15m relative volume: **{q.relvol:.2f}×**' if pd.notna(q.relvol) else '15m relative volume: unavailable')
 st.write(f'20-bar resistance: **${q.resistance:.4f}** | support: **${q.support:.4f}**')
+st.caption('Price, support, and resistance are per ADA; each contract represents 1,000 ADA.')
+with st.expander('Why this signal?'):
+    st.write(f'1h and 15m aligned: {ht == qt and ht != "NEUTRAL"} | ADX ≥ 20: {bool(adx_good)} | Relative volume ≥ 1.15×: {bool(vol_good)}')
+    st.write(f'Long: above VWAP {bool(vwap_up)}, above resistance {bool(break_up)}, RSI < 75 {bool(q.rsi < 75)}')
+    st.write(f'Short: below VWAP {bool(vwap_down)}, below support {bool(break_down)}, RSI > 25 {bool(q.rsi > 25)}')
+    st.caption('All conditions for the chosen direction must pass before a setup is confirmed.')
 st.caption('Early breakout watch is not an entry signal. Confirmed means rule conditions passed, not that a profitable trade is assured.')
 
 if signal != 'WAIT':
